@@ -6,9 +6,9 @@ import asyncio
 import logging
 
 # Конфигурация
-BOT_TOKEN = "8078711796:AAHzi1u5PcC6Uz4mWNe7Bvg7RkvxXQWxLlU"
-SUPABASE_URL = "https://ejmxmmxmqsomlifjhgjb.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVqbXhtbXhtcXNvbWxpZmpoZ2piIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc4MzY3NjksImV4cCI6MjA2MzQxMjc2OX0.R91BPgCAwqokoELVXoSFJDhWq6DPUBtTSEQHjDDlj5k"
+BOT_TOKEN = ""
+SUPABASE_URL = ""
+SUPABASE_KEY = ""
 ADMIN_ID = 534737101
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
