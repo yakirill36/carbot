@@ -3,7 +3,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.filters import CommandStart
 from supabase import create_client, Client
-import asyncio
+from httpx import Client as HTTPXClientimport asyncio
 import logging
 import os
 
