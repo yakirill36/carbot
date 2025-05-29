@@ -2,3 +2,4 @@ aiogram==3.4.1
 supabase==2.3.5
 httpx==0.24.1
 python-dotenv==1.0.1
+gotrue==2.12.0
