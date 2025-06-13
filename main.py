@@ -7,6 +7,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.filters import CommandStart
 from supabase import create_client, Client
+import httpx
 
 # Загрузка переменных окружения
 load_dotenv()
@@ -15,6 +16,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+HIMERA_API_KEY = os.getenv("HIMERA_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 # Проверка переменных окружения
@@ -47,6 +49,21 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+# Функция для запроса к API Himera
+async def search_himera(car_number: str):
+    url = f"https://api.himera.search/v2/lookup?car_number={car_number}"
+    headers = {"Authorization": f"Bearer {HIMERA_API_KEY}"}
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logging.warning(f"Himera API error: {response.status_code} - {response.text}")
+    except Exception as e:
+        logging.error(f"Ошибка обращения к Himera API: {e}")
+    return None
+
 # Обработка команды /start
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -78,13 +95,13 @@ async def contact_handler(message: Message):
         user_states[user_id] = {"step": "idle"}
         return
 
-    # Регистрация нового пользователя
     supabase.table("users").insert({
         "telegram_id": user_id,
         "username": username,
         "phone_number": phone_number,
         "verified": False,
-        "allow_direct": False
+        "allow_direct": False,
+        "source": "bot"
     }).execute()
 
     user_states[user_id] = {
@@ -152,68 +169,32 @@ async def handle_message(message: Message):
         car_number = text.upper().replace(" ", "")
         result = supabase.table("users").select("*").eq("car_number", car_number).execute()
 
-        if result.data:
-            target_user = result.data[0]
-            target_id = target_user["telegram_id"]
+        if not result.data:
+            # Запрос к Himera, если в базе нет
+            himera_data = await search_himera(car_number)
+            if himera_data and "car_number" in himera_data:
+                new_user = {
+                    "car_number": himera_data.get("car_number"),
+                    "username": himera_data.get("telegram", None),
+                    "phone_number": himera_data.get("phone", None),
+                    "verified": False,
+                    "allow_direct": False,
+                    "source": "himera",
+                    "telegram_id": None
+                }
+                supabase.table("users").insert(new_user).execute()
+                result = {"data": [new_user]}
 
-            user_states[user_id] = {"step": "dialog", "target_id": target_id, "car_number": car_number}
-            user_states[target_id] = {"step": "dialog", "target_id": user_id, "car_number": car_number}
-
+        if result and result["data"]:
+            target_user = result["data"][0]
+            username = target_user.get("username")
             await message.answer(
-                f"Пользователь найден: @{target_user.get('username')}\nВведите сообщение:",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                    resize_keyboard=True
-                )
-            )
-            await bot.send_message(
-                target_id,
-                f"🚗 Пользователь с номером авто {car_number} начал с вами диалог.\nВведите сообщение:",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                    resize_keyboard=True
-                )
-            )
-        else:
-            await message.answer(
-                "Пользователь не зарегистрирован в системе. Отправьте ему приглашение в наш бот.",
+                f"Пользователь найден: @{username if username else 'неизвестен'}",
                 reply_markup=main_menu
             )
-            user_states[user_id] = {"step": "idle"}
-
-    elif state["step"] == "dialog":
-        if text.lower() == "завершить диалог":
-            target_id = state["target_id"]
-            await message.answer("Ожидаем подтверждение второго пользователя на завершение...")
-            await bot.send_message(target_id, "Пользователь хочет завершить диалог. Подтвердите (Да/Нет).")
-            user_states[target_id] = {"step": "confirm_end", "initiator_id": user_id}
-            return
-
-        msg = text
-        target_id = state["target_id"]
-        car_number = state.get("car_number", "неизвестен")
-
-        try:
-            await bot.send_message(target_id, f"📩 Входящее сообщение от {car_number}:\n{msg}")
-            await message.answer("Сообщение отправлено ✅")
-        except Exception as e:
-            logging.error(f"Ошибка отправки сообщения: {e}")
-            await message.answer("❌ Ошибка при отправке.")
-
-    elif state["step"] == "confirm_end":
-        initiator_id = state["initiator_id"]
-        if text.lower() in ["да", "yes"]:
-            await bot.send_message(initiator_id, "Пользователь подтвердил завершение диалога ✅", reply_markup=main_menu)
-            await message.answer("Диалог завершён ✅", reply_markup=main_menu)
-            user_states[user_id] = {"step": "idle"}
-            user_states[initiator_id] = {"step": "idle"}
         else:
-            await message.answer("Диалог продолжается.", reply_markup=ReplyKeyboardMarkup(
-                keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                resize_keyboard=True
-            ))
-            user_states[user_id] = {"step": "dialog", "target_id": initiator_id}
-            user_states[initiator_id] = {"step": "dialog", "target_id": user_id}
+            await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
+        user_states[user_id] = {"step": "idle"}
 
 # Точка входа
 async def main():
