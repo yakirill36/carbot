@@ -107,7 +107,7 @@ async def contact_handler(message: Message):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
-    state = user_states.get(user_id)
+    state = user_states.get(user_id, {"step": "idle"})  # Добавляем дефолтное состояние
 
     if text == "🔍 Поиск по номеру авто":
         await message.answer("Введите номер автомобиля для поиска:", reply_markup=ReplyKeyboardRemove())
@@ -119,13 +119,14 @@ async def handle_message(message: Message):
         user_states[user_id] = {"step": "support_message"}
         return
 
-    if state is None:
-        response = supabase.table("users").select("*").eq("telegram_id", user_id).execute()
-        if response.data:
-            await message.answer("Вы уже зарегистрированы ✅", reply_markup=main_menu)
-            user_states[user_id] = {"step": "idle"}
-        else:
-            await message.answer("Напишите /start, чтобы начать регистрацию")
+    if text == "Завершить диалог":
+        target_id = state.get("target_id")
+        if target_id:
+            await bot.send_message(target_id, "❌ Диалог завершён.", reply_markup=main_menu)
+            if target_id in user_states:
+                user_states[target_id] = {"step": "idle"}
+        await message.answer("❌ Диалог завершён.", reply_markup=main_menu)
+        user_states[user_id] = {"step": "idle"}
         return
 
     if state["step"] == "support_message":
@@ -178,20 +179,41 @@ async def handle_message(message: Message):
             if target_id and allow_direct:
                 await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
             elif target_id:
-                user_states[user_id] = {"step": "dialog", "target_id": target_id, "car_number": car_number, "pending_message": text}
+                user_states[user_id] = {"step": "dialog", "target_id": target_id, "car_number": car_number}
                 user_states[target_id] = {"step": "dialog", "target_id": user_id, "car_number": car_number}
 
-                await message.answer("Пользователь найден. Начинаем диалог через бота.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
-                await bot.send_message(target_id, f"🚗 Пользователь с номером авто {car_number} начал с вами диалог.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
-                pending = user_states[user_id].get("pending_message")
-                if pending:
-                    await bot.send_message(target_id, f"📩 Входящее сообщение от {car_number}:\n{pending}")
-                    await message.answer("Сообщение отправлено ✅")
-                    user_states[user_id].pop("pending_message", None)
+                await message.answer(
+                    "Пользователь найден. Начинаем диалог через бота.",
+                    reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
+                await bot.send_message(
+                    target_id,
+                    f"🚗 Пользователь с номером авто {car_number} хочет начать с вами диалог. Напишите ответ:",
+                    reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
             else:
                 await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
         else:
             await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
+        user_states[user_id] = {"step": "idle"}
+
+    elif state["step"] == "dialog":
+        target_id = state.get("target_id")
+        if not target_id:
+            await message.answer("❌ Ошибка: получатель не найден.", reply_markup=main_menu)
+            user_states[user_id] = {"step": "idle"}
+            return
+
+        try:
+            await bot.send_message(
+                target_id,
+                f"📩 Сообщение от пользователя с номером авто {state.get('car_number', 'неизвестен')}:\n{text}"
+            )
+            await message.answer("✅ Сообщение отправлено!")
+        except Exception as e:
+            await message.answer("❌ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота.", reply_markup=main_menu)
+            user_states[user_id] = {"step": "idle"}
+
+    else:  # Если состояние неизвестно или idle
+        await message.answer("Выберите действие из меню:", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
 
 # Точка входа
