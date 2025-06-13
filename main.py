@@ -19,7 +19,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 HIMERA_API_KEY = os.getenv("HIMERA_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-# Проверка переменных окружения
 if not BOT_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("❌ Не заданы обязательные переменные окружения: BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY")
 
@@ -28,7 +27,6 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 user_states = {}
 
-# Клавиатуры
 contact_keyboard = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Подтвердить номер телефона", request_contact=True)]],
     resize_keyboard=True,
@@ -49,7 +47,6 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-# Функция для запроса к API Himera
 async def search_himera(car_number: str):
     url = f"https://api.himera.search/v2/lookup?car_number={car_number}"
     headers = {"Authorization": f"Bearer {HIMERA_API_KEY}"}
@@ -64,7 +61,6 @@ async def search_himera(car_number: str):
         logging.error(f"Ошибка обращения к Himera API: {e}")
     return None
 
-# Обработка команды /start
 @dp.message(CommandStart())
 async def start(message: Message):
     user_id = message.from_user.id
@@ -77,12 +73,8 @@ async def start(message: Message):
         return
 
     user_states[user_id] = {"step": "awaiting_phone", "username": username}
-    await message.answer(
-        "Добро пожаловать! 🚘\nПожалуйста, подтвердите номер телефона:",
-        reply_markup=contact_keyboard
-    )
+    await message.answer("Добро пожаловать! 🚘\nПожалуйста, подтвердите номер телефона:", reply_markup=contact_keyboard)
 
-# Обработка номера телефона
 @dp.message(lambda message: message.contact is not None)
 async def contact_handler(message: Message):
     user_id = message.from_user.id
@@ -111,7 +103,6 @@ async def contact_handler(message: Message):
     }
     await message.answer("Номер подтверждён ✅\nВведите номер автомобиля:", reply_markup=ReplyKeyboardRemove())
 
-# Обработка всех остальных сообщений
 @dp.message()
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -149,36 +140,27 @@ async def handle_message(message: Message):
         await message.answer("Разрешаете другим пользователям писать вам в ЛС?", reply_markup=allow_direct_keyboard)
 
     elif state["step"] == "awaiting_allow_direct":
-        if text.lower() in ["да", "yes"]:
-            allow_direct = True
-        elif text.lower() in ["нет", "no"]:
-            allow_direct = False
-        else:
+        allow_direct = text.lower() in ["да", "yes"]
+        if text.lower() not in ["да", "yes", "нет", "no"]:
             await message.answer("Пожалуйста, выберите 'Да' или 'Нет'.", reply_markup=allow_direct_keyboard)
             return
 
-        supabase.table("users").update({
-            "verified": True,
-            "allow_direct": allow_direct
-        }).eq("telegram_id", user_id).execute()
-
+        supabase.table("users").update({"verified": True, "allow_direct": allow_direct}).eq("telegram_id", user_id).execute()
         await message.answer("Регистрация завершена ✅", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
 
     elif state["step"] == "search_car":
         car_number = text.upper().replace(" ", "")
         result = supabase.table("users").select("*").eq("car_number", car_number).execute()
+        target_user = result.data[0] if result.data else None
 
-        target_user = None
-        if result.data:
-            target_user = result.data[0]
-        else:
+        if not target_user:
             himera_data = await search_himera(car_number)
             if himera_data and "car_number" in himera_data:
                 new_user = {
                     "car_number": himera_data.get("car_number"),
-                    "username": himera_data.get("telegram", None),
-                    "phone_number": himera_data.get("phone", None),
+                    "username": himera_data.get("telegram"),
+                    "phone_number": himera_data.get("phone"),
                     "verified": False,
                     "allow_direct": False,
                     "source": "himera",
@@ -188,45 +170,26 @@ async def handle_message(message: Message):
                 target_user = new_user
 
         if target_user:
+            target_id = target_user.get("telegram_id")
             allow_direct = target_user.get("allow_direct", False)
             username = target_user.get("username")
+            car_number = target_user.get("car_number", "неизвестен")
 
-            if allow_direct and username:
-                await message.answer(
-                    f"Пользователь найден: @{username}\nВы можете написать ему напрямую в Telegram.",
-                    reply_markup=main_menu
-                )
+            if target_id and allow_direct:
+                await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
+            elif target_id:
+                user_states[user_id] = {"step": "dialog", "target_id": target_id, "car_number": car_number, "pending_message": text}
+                user_states[target_id] = {"step": "dialog", "target_id": user_id, "car_number": car_number}
+
+                await message.answer("Пользователь найден. Начинаем диалог через бота.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
+                await bot.send_message(target_id, f"🚗 Пользователь с номером авто {car_number} начал с вами диалог.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
+                pending = user_states[user_id].get("pending_message")
+                if pending:
+                    await bot.send_message(target_id, f"📩 Входящее сообщение от {car_number}:\n{pending}")
+                    await message.answer("Сообщение отправлено ✅")
+                    user_states[user_id].pop("pending_message", None)
             else:
-                target_id = target_user.get("telegram_id")
-                if not target_id:
-                    await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
-                else:
-                    user_states[user_id] = {
-                        "step": "dialog",
-                        "target_id": target_id,
-                        "car_number": car_number
-                    }
-                    user_states[target_id] = {
-                        "step": "dialog",
-                        "target_id": user_id,
-                        "car_number": car_number
-                    }
-
-                    await message.answer(
-                        "Пользователь найден, он не принимает ЛС. Можете общаться через бот.\nВведите сообщение:",
-                        reply_markup=ReplyKeyboardMarkup(
-                            keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                            resize_keyboard=True
-                        )
-                    )
-                    await bot.send_message(
-                        target_id,
-                        f"🚗 Пользователь с номером авто {car_number} начал с вами диалог.\nВведите сообщение:",
-                        reply_markup=ReplyKeyboardMarkup(
-                            keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                            resize_keyboard=True
-                        )
-                    )
+                await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
         else:
             await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
