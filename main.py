@@ -170,7 +170,6 @@ async def handle_message(message: Message):
         result = supabase.table("users").select("*").eq("car_number", car_number).execute()
 
         target_user = None
-
         if result.data:
             target_user = result.data[0]
         else:
@@ -189,14 +188,47 @@ async def handle_message(message: Message):
                 target_user = new_user
 
         if target_user:
+            allow_direct = target_user.get("allow_direct", False)
             username = target_user.get("username")
-            await message.answer(
-                f"Пользователь найден: @{username if username else 'неизвестен'}",
-                reply_markup=main_menu
-            )
+
+            if allow_direct and username:
+                await message.answer(
+                    f"Пользователь найден: @{username}\nВы можете написать ему напрямую в Telegram.",
+                    reply_markup=main_menu
+                )
+            else:
+                target_id = target_user.get("telegram_id")
+                if not target_id:
+                    await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
+                else:
+                    user_states[user_id] = {
+                        "step": "dialog",
+                        "target_id": target_id,
+                        "car_number": car_number
+                    }
+                    user_states[target_id] = {
+                        "step": "dialog",
+                        "target_id": user_id,
+                        "car_number": car_number
+                    }
+
+                    await message.answer(
+                        "Пользователь найден, он не принимает ЛС. Можете общаться через бот.\nВведите сообщение:",
+                        reply_markup=ReplyKeyboardMarkup(
+                            keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                            resize_keyboard=True
+                        )
+                    )
+                    await bot.send_message(
+                        target_id,
+                        f"🚗 Пользователь с номером авто {car_number} начал с вами диалог.\nВведите сообщение:",
+                        reply_markup=ReplyKeyboardMarkup(
+                            keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                            resize_keyboard=True
+                        )
+                    )
         else:
             await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
-
         user_states[user_id] = {"step": "idle"}
 
 # Точка входа
