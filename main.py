@@ -107,8 +107,9 @@ async def contact_handler(message: Message):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
-    state = user_states.get(user_id, {"step": "idle"})  # Добавляем дефолтное состояние
+    state = user_states.get(user_id, {"step": "idle"})  # Дефолтное состояние
 
+    # Обработка кнопок меню
     if text == "🔍 Поиск по номеру авто":
         await message.answer("Введите номер автомобиля для поиска:", reply_markup=ReplyKeyboardRemove())
         user_states[user_id] = {"step": "search_car"}
@@ -129,11 +130,13 @@ async def handle_message(message: Message):
         user_states[user_id] = {"step": "idle"}
         return
 
+    # Логика поддержки
     if state["step"] == "support_message":
         await bot.send_message(ADMIN_ID, f"📬 Запрос в поддержку:\nОт: @{message.from_user.username}\nID: {user_id}\nСообщение: {text}")
         await message.answer("Спасибо, ваш запрос передан! Мы свяжемся с вами при необходимости.", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
 
+    # Логика регистрации
     elif state["step"] == "awaiting_car_number":
         car_number = text.upper().replace(" ", "")
         supabase.table("users").update({"car_number": car_number}).eq("telegram_id", user_id).execute()
@@ -145,11 +148,11 @@ async def handle_message(message: Message):
         if text.lower() not in ["да", "yes", "нет", "no"]:
             await message.answer("Пожалуйста, выберите 'Да' или 'Нет'.", reply_markup=allow_direct_keyboard)
             return
-
         supabase.table("users").update({"verified": True, "allow_direct": allow_direct}).eq("telegram_id", user_id).execute()
         await message.answer("Регистрация завершена ✅", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
 
+    # Логика поиска и диалога
     elif state["step"] == "search_car":
         car_number = text.upper().replace(" ", "")
         result = supabase.table("users").select("*").eq("car_number", car_number).execute()
@@ -174,27 +177,54 @@ async def handle_message(message: Message):
             target_id = target_user.get("telegram_id")
             allow_direct = target_user.get("allow_direct", False)
             username = target_user.get("username")
-            car_number = target_user.get("car_number", "неизвестен")
+            target_car_number = target_user.get("car_number", "неизвестен")
+
+            # Получаем номер авто текущего пользователя (отправителя)
+            current_user_data = supabase.table("users").select("car_number").eq("telegram_id", user_id).execute()
+            sender_car_number = current_user_data.data[0].get("car_number") if current_user_data.data else "неизвестен"
 
             if target_id and allow_direct:
                 await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
             elif target_id:
-                user_states[user_id] = {"step": "dialog", "target_id": target_id, "car_number": car_number}
-                user_states[target_id] = {"step": "dialog", "target_id": user_id, "car_number": car_number}
+                user_states[user_id] = {
+                    "step": "dialog",
+                    "target_id": target_id,
+                    "sender_car_number": sender_car_number,
+                    "target_car_number": target_car_number
+                }
+                user_states[target_id] = {
+                    "step": "dialog",
+                    "target_id": user_id,
+                    "sender_car_number": sender_car_number,
+                    "target_car_number": target_car_number
+                }
 
                 await message.answer(
-                    "Пользователь найден. Начинаем диалог через бота.",
-                    reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
+                    f"🔹 Начинаем диалог с владельцем авто {target_car_number}.\n\n"
+                    "Пишите сообщения — они будут пересланы.\n"
+                    "Для завершения нажмите кнопку ниже.",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                        resize_keyboard=True
+                    )
+                )
                 await bot.send_message(
                     target_id,
-                    f"🚗 Пользователь с номером авто {car_number} хочет начать с вами диалог. Напишите ответ:",
-                    reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="Завершить диалог")]], resize_keyboard=True))
+                    f"🔹 Владелец авто {sender_car_number} начал с вами диалог.\n\n"
+                    "Пишите ответ — сообщения будут пересланы.\n"
+                    "Для завершения нажмите кнопку ниже.",
+                    reply_markup=ReplyKeyboardMarkup(
+                        keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                        resize_keyboard=True
+                    )
+                )
             else:
                 await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
         else:
             await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
 
+    # Логика пересылки сообщений
     elif state["step"] == "dialog":
         target_id = state.get("target_id")
         if not target_id:
@@ -205,17 +235,18 @@ async def handle_message(message: Message):
         try:
             await bot.send_message(
                 target_id,
-                f"📩 Сообщение от пользователя с номером авто {state.get('car_number', 'неизвестен')}:\n{text}"
+                f"📩 Сообщение от владельца авто {state.get('sender_car_number', 'неизвестен')}:\n\n{text}"
             )
-            await message.answer("✅ Сообщение отправлено!")
+            await message.answer("✅ Сообщение доставлено!")
         except Exception as e:
-            await message.answer("❌ Не удалось отправить сообщение. Возможно, пользователь заблокировал бота.", reply_markup=main_menu)
+            logging.error(f"Ошибка отправки: {e}")
+            await message.answer("❌ Не удалось отправить сообщение. Пользователь, возможно, заблокировал бота.", reply_markup=main_menu)
             user_states[user_id] = {"step": "idle"}
 
-    else:  # Если состояние неизвестно или idle
+    # Дефолтная реакция
+    else:
         await message.answer("Выберите действие из меню:", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
-
 # Точка входа
 async def main():
     logging.basicConfig(level=logging.INFO)
