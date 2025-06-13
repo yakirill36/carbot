@@ -169,8 +169,11 @@ async def handle_message(message: Message):
         car_number = text.upper().replace(" ", "")
         result = supabase.table("users").select("*").eq("car_number", car_number).execute()
 
-        if not result.data:
-            # Запрос к Himera, если в базе нет
+        target_user = None
+
+        if result.data:
+            target_user = result.data[0]
+        else:
             himera_data = await search_himera(car_number)
             if himera_data and "car_number" in himera_data:
                 new_user = {
@@ -183,10 +186,9 @@ async def handle_message(message: Message):
                     "telegram_id": None
                 }
                 supabase.table("users").insert(new_user).execute()
-                result = {"data": [new_user]}
+                target_user = new_user
 
-        if result and result["data"]:
-            target_user = result["data"][0]
+        if target_user:
             username = target_user.get("username")
             await message.answer(
                 f"Пользователь найден: @{username if username else 'неизвестен'}",
@@ -194,6 +196,7 @@ async def handle_message(message: Message):
             )
         else:
             await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
+
         user_states[user_id] = {"step": "idle"}
 
 # Точка входа
