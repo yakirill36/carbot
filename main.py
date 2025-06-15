@@ -288,15 +288,15 @@ async def handle_message(message: Message):
             current_user_data = supabase.table("users").select("car_number").eq("telegram_id", user_id).execute()
             sender_car_number = current_user_data.data[0].get("car_number") if current_user_data.data else "неизвестен"
 
-            if target_id and allow_direct:
-                await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
-  elif target_id:
-                user_states[user_id] = {
-                    "step": "awaiting_first_message",
-                    "target_id": target_id,
-                    "sender_car_number": sender_car_number,
-                    "target_car_number": target_car_number
-                }
+          if target_id and allow_direct:  # <- Первый вложенный if
+            await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
+        elif target_id:  # <- elif должен быть на том же уровне, что и if
+            user_states[user_id] = {
+                "step": "awaiting_first_message",
+                "target_id": target_id,
+                "sender_car_number": sender_car_number,
+                "target_car_number": target_car_number
+
                 user_states[target_id] = {
                     "step": "dialog",
                     "target_id": user_id,
