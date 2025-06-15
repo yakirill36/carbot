@@ -1,7 +1,7 @@
-# main.py
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -26,7 +26,9 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 user_states = {}
+pending_shutdowns = {}  # Для хранения запросов на завершение диалога
 
+# Клавиатуры
 contact_keyboard = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Подтвердить номер телефона", request_contact=True)]],
     resize_keyboard=True,
@@ -47,6 +49,14 @@ main_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+shutdown_request_keyboard = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✅ Подтвердить завершение")],
+        [KeyboardButton(text="❌ Продолжить общение")]
+    ],
+    resize_keyboard=True
+)
+
 async def search_himera(car_number: str):
     url = f"https://api.himera.search/v2/lookup?car_number={car_number}"
     headers = {"Authorization": f"Bearer {HIMERA_API_KEY}"}
@@ -60,6 +70,49 @@ async def search_himera(car_number: str):
     except Exception as e:
         logging.error(f"Ошибка обращения к Himera API: {e}")
     return None
+
+async def cleanup_pending_shutdowns():
+    while True:
+        now = datetime.now()
+        to_delete = []
+        
+        for user_id, shutdown_time in pending_shutdowns.items():
+            if now > shutdown_time:
+                target_id = user_states.get(user_id, {}).get('target_id')
+                if target_id:
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            "❌ Подтверждение не получено, диалог продолжается",
+                            reply_markup=ReplyKeyboardMarkup(
+                                keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                                resize_keyboard=True
+                            )
+                        )
+                        await bot.send_message(
+                            target_id,
+                            "❌ Собеседник не подтвердил завершение, диалог продолжается",
+                            reply_markup=ReplyKeyboardMarkup(
+                                keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                                resize_keyboard=True
+                            )
+                        )
+                    except:
+                        pass
+                    # Возвращаем обычное состояние диалога
+                    if user_id in user_states:
+                        user_states[user_id]['step'] = 'dialog'
+                    if target_id in user_states:
+                        user_states[target_id]['step'] = 'dialog'
+                to_delete.append(user_id)
+        
+        for user_id in to_delete:
+            del pending_shutdowns[user_id]
+        
+        await asyncio.sleep(10)  # Проверка каждые 10 секунд
+
+async def on_startup():
+    asyncio.create_task(cleanup_pending_shutdowns())
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -107,7 +160,7 @@ async def contact_handler(message: Message):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     text = message.text.strip()
-    state = user_states.get(user_id, {"step": "idle"})  # Дефолтное состояние
+    state = user_states.get(user_id, {"step": "idle"})
 
     # Обработка кнопок меню
     if text == "🔍 Поиск по номеру авто":
@@ -120,14 +173,67 @@ async def handle_message(message: Message):
         user_states[user_id] = {"step": "support_message"}
         return
 
+    # Обработка завершения диалога
     if text == "Завершить диалог":
         target_id = state.get("target_id")
         if target_id:
-            await bot.send_message(target_id, "❌ Диалог завершён.", reply_markup=main_menu)
-            if target_id in user_states:
-                user_states[target_id] = {"step": "idle"}
-        await message.answer("❌ Диалог завершён.", reply_markup=main_menu)
-        user_states[user_id] = {"step": "idle"}
+            pending_shutdowns[user_id] = datetime.now() + timedelta(minutes=5)
+            user_states[user_id]['step'] = 'awaiting_shutdown_confirmation'
+            user_states[target_id]['step'] = 'shutdown_requested'
+            
+            await bot.send_message(
+                target_id,
+                "⚠️ Собеседник хочет завершить диалог. Подтвердите:",
+                reply_markup=shutdown_request_keyboard
+            )
+            await message.answer(
+                "⏳ Ожидаем подтверждения завершения от собеседника...",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        return
+
+    # Обработка подтверждения завершения
+    if state["step"] == "shutdown_requested" and text == "✅ Подтвердить завершение":
+        target_id = state.get("target_id")
+        if target_id and user_id in pending_shutdowns:
+            await bot.send_message(
+                target_id,
+                "❌ Диалог завершён по соглашению сторон.",
+                reply_markup=main_menu
+            )
+            await message.answer(
+                "❌ Диалог завершён по соглашению сторон.",
+                reply_markup=main_menu
+            )
+            user_states[user_id] = {"step": "idle"}
+            user_states[target_id] = {"step": "idle"}
+            if target_id in pending_shutdowns:
+                del pending_shutdowns[target_id]
+        return
+
+    # Обработка отказа от завершения
+    if state["step"] == "shutdown_requested" and text == "❌ Продолжить общение":
+        target_id = state.get("target_id")
+        if target_id and user_id in pending_shutdowns:
+            await bot.send_message(
+                target_id,
+                "➡️ Собеседник решил продолжить диалог",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
+                )
+            )
+            await message.answer(
+                "➡️ Диалог продолжается",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
+                )
+            )
+            user_states[user_id]['step'] = 'dialog'
+            user_states[target_id]['step'] = 'dialog'
+            if target_id in pending_shutdowns:
+                del pending_shutdowns[target_id]
         return
 
     # Логика поддержки
@@ -179,7 +285,6 @@ async def handle_message(message: Message):
             username = target_user.get("username")
             target_car_number = target_user.get("car_number", "неизвестен")
 
-            # Получаем номер авто текущего пользователя (отправителя)
             current_user_data = supabase.table("users").select("car_number").eq("telegram_id", user_id).execute()
             sender_car_number = current_user_data.data[0].get("car_number") if current_user_data.data else "неизвестен"
 
@@ -235,21 +340,35 @@ async def handle_message(message: Message):
         try:
             await bot.send_message(
                 target_id,
-                f"📩 Сообщение от владельца авто {state.get('sender_car_number', 'неизвестен')}:\n\n{text}"
+                f"📩 Сообщение от владельца авто {state.get('sender_car_number', 'неизвестен')}:\n\n{text}",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
+                )
             )
-            await message.answer("✅ Сообщение доставлено!")
+            await message.answer(
+                "✅ Сообщение доставлено!",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
+                )
+            )
         except Exception as e:
             logging.error(f"Ошибка отправки: {e}")
-            await message.answer("❌ Не удалось отправить сообщение. Пользователь, возможно, заблокировал бота.", reply_markup=main_menu)
+            await message.answer(
+                "❌ Не удалось отправить сообщение. Пользователь, возможно, заблокировал бота.",
+                reply_markup=main_menu
+            )
             user_states[user_id] = {"step": "idle"}
 
     # Дефолтная реакция
     else:
         await message.answer("Выберите действие из меню:", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
-# Точка входа
+
 async def main():
     logging.basicConfig(level=logging.INFO)
+    await on_startup()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
