@@ -290,9 +290,9 @@ async def handle_message(message: Message):
 
             if target_id and allow_direct:
                 await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
-            elif target_id:
+  elif target_id:
                 user_states[user_id] = {
-                    "step": "dialog",
+                    "step": "awaiting_first_message",
                     "target_id": target_id,
                     "sender_car_number": sender_car_number,
                     "target_car_number": target_car_number
@@ -304,25 +304,25 @@ async def handle_message(message: Message):
                     "target_car_number": target_car_number
                 }
 
-                await message.answer(
-                    f"🔹 Начинаем диалог с владельцем авто {target_car_number}.\n\n"
-                    "Пишите сообщения — они будут пересланы.\n"
-                    "Для завершения нажмите кнопку ниже.",
+                                await message.answer(
+                    f"🔹 Начинаем диалог с владельцем авто {target_car_number}.\n"
+                    "Напишите ваше первое сообщение:",
                     reply_markup=ReplyKeyboardMarkup(
                         keyboard=[[KeyboardButton(text="Завершить диалог")]],
                         resize_keyboard=True
                     )
                 )
-                await bot.send_message(
+
+          await bot.send_message(
                     target_id,
-                    f"🔹 Владелец авто {sender_car_number} начал с вами диалог.\n\n"
-                    "Пишите ответ — сообщения будут пересланы.\n"
-                    "Для завершения нажмите кнопку ниже.",
+                    f"🔹 Владелец авто {sender_car_number} начал с вами диалог.\n"
+                    "Ожидайте первое сообщение...",
                     reply_markup=ReplyKeyboardMarkup(
                         keyboard=[[KeyboardButton(text="Завершить диалог")]],
                         resize_keyboard=True
                     )
                 )
+                return
             else:
                 await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
         else:
@@ -330,14 +330,15 @@ async def handle_message(message: Message):
         user_states[user_id] = {"step": "idle"}
 
     # Логика пересылки сообщений
-    elif state["step"] == "dialog":
+    elif state["step"] == "awaiting_first_message":
         target_id = state.get("target_id")
         if not target_id:
             await message.answer("❌ Ошибка: получатель не найден.", reply_markup=main_menu)
             user_states[user_id] = {"step": "idle"}
             return
 
-        try:
+         try:
+            # Отправляем сообщение получателю
             await bot.send_message(
                 target_id,
                 f"📩 Сообщение от владельца авто {state.get('sender_car_number', 'неизвестен')}:\n\n{text}",
@@ -346,6 +347,7 @@ async def handle_message(message: Message):
                     resize_keyboard=True
                 )
             )
+            # Подтверждение отправителю
             await message.answer(
                 "✅ Сообщение доставлено!",
                 reply_markup=ReplyKeyboardMarkup(
@@ -353,6 +355,8 @@ async def handle_message(message: Message):
                     resize_keyboard=True
                 )
             )
+            # Меняем состояние на обычный диалог
+            user_states[user_id]['step'] = 'dialog'
         except Exception as e:
             logging.error(f"Ошибка отправки: {e}")
             await message.answer(
