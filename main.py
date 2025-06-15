@@ -259,35 +259,36 @@ async def handle_message(message: Message):
         user_states[user_id] = {"step": "idle"}
 
     # Логика поиска и диалога
-    elif state["step"] == "search_car":
-        car_number = text.upper().replace(" ", "")
-        result = supabase.table("users").select("*").eq("car_number", car_number).execute()
-        target_user = result.data[0] if result.data else None
+ elif state["step"] == "search_car":
+    car_number = text.upper().replace(" ", "")
+    result = supabase.table("users").select("*").eq("car_number", car_number).execute()
+    target_user = result.data[0] if result.data else None
 
-        if not target_user:
-            himera_data = await search_himera(car_number)
-            if himera_data and "car_number" in himera_data:
-                new_user = {
-                    "car_number": himera_data.get("car_number"),
-                    "username": himera_data.get("telegram"),
-                    "phone_number": himera_data.get("phone"),
-                    "verified": False,
-                    "allow_direct": False,
-                    "source": "himera",
-                    "telegram_id": None
-                }
-                supabase.table("users").insert(new_user).execute()
-                target_user = new_user
+    if not target_user:
+        himera_data = await search_himera(car_number)
+        if himera_data and "car_number" in himera_data:
+            new_user = {
+                "car_number": himera_data.get("car_number"),
+                "username": himera_data.get("telegram"),
+                "phone_number": himera_data.get("phone"),
+                "verified": False,
+                "allow_direct": False,
+                "source": "himera",
+                "telegram_id": None
+            }
+            supabase.table("users").insert(new_user).execute()
+            target_user = new_user
 
-        if target_user:
-            target_id = target_user.get("telegram_id")
-            allow_direct = target_user.get("allow_direct", False)
-            username = target_user.get("username")
-            target_car_number = target_user.get("car_number", "неизвестен")
+    if target_user:
+        target_id = target_user.get("telegram_id")
+        allow_direct = target_user.get("allow_direct", False)
+        username = target_user.get("username")
+        target_car_number = target_user.get("car_number", "неизвестен")
 
-            current_user_data = supabase.table("users").select("car_number").eq("telegram_id", user_id).execute()
-            sender_car_number = current_user_data.data[0].get("car_number") if current_user_data.data else "неизвестен"
-            if target_id and allow_direct:
+        current_user_data = supabase.table("users").select("car_number").eq("telegram_id", user_id).execute()
+        sender_car_number = current_user_data.data[0].get("car_number") if current_user_data.data else "неизвестен"
+
+        if target_id and allow_direct:
             await message.answer(f"Пользователь найден: @{username if username else 'неизвестен'}\nВы можете написать ему напрямую.", reply_markup=main_menu)
         elif target_id:
             user_states[user_id] = {
@@ -296,38 +297,35 @@ async def handle_message(message: Message):
                 "sender_car_number": sender_car_number,
                 "target_car_number": target_car_number
             }
-                user_states[target_id] = {
-                    "step": "dialog",
-                    "target_id": user_id,
-                    "sender_car_number": sender_car_number,
-                    "target_car_number": target_car_number
-                }
+            user_states[target_id] = {
+                "step": "dialog",
+                "target_id": user_id,
+                "sender_car_number": sender_car_number,
+                "target_car_number": target_car_number
+            }
 
-                                await message.answer(
-                    f"🔹 Начинаем диалог с владельцем авто {target_car_number}.\n"
-                    "Напишите ваше первое сообщение:",
-                    reply_markup=ReplyKeyboardMarkup(
-                        keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                        resize_keyboard=True
-                    )
+            await message.answer(
+                f"🔹 Начинаем диалог с владельцем авто {target_car_number}.\n"
+                "Напишите ваше первое сообщение:",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
                 )
-
-          await bot.send_message(
-                    target_id,
-                    f"🔹 Владелец авто {sender_car_number} начал с вами диалог.\n"
-                    "Ожидайте первое сообщение...",
-                    reply_markup=ReplyKeyboardMarkup(
-                        keyboard=[[KeyboardButton(text="Завершить диалог")]],
-                        resize_keyboard=True
-                    )
+            )
+            
+            await bot.send_message(
+                target_id,
+                f"🔹 Владелец авто {sender_car_number} начал с вами диалог.\n"
+                "Ожидайте первое сообщение...",
+                reply_markup=ReplyKeyboardMarkup(
+                    keyboard=[[KeyboardButton(text="Завершить диалог")]],
+                    resize_keyboard=True
                 )
-                return
-            else:
-                await message.answer("Этот пользователь пока не зарегистрирован в боте.", reply_markup=main_menu)
-        else:
-            await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
-        user_states[user_id] = {"step": "idle"}
-
+            )
+            return
+    else:
+        await message.answer("Пользователь не найден даже через Himera.", reply_markup=main_menu)
+    user_states[user_id] = {"step": "idle"}
     # Логика пересылки сообщений
     elif state["step"] == "awaiting_first_message":
         target_id = state.get("target_id")
