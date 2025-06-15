@@ -257,7 +257,6 @@ async def handle_message(message: Message):
         supabase.table("users").update({"verified": True, "allow_direct": allow_direct}).eq("telegram_id", user_id).execute()
         await message.answer("Регистрация завершена ✅", reply_markup=main_menu)
         user_states[user_id] = {"step": "idle"}
-
     # Логика поиска и диалога
  elif state["step"] == "search_car":
     car_number = text.upper().replace(" ", "")
