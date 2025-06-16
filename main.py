@@ -375,7 +375,7 @@ async def handle_message(message: Message):
                     source = "supabase_from_himera_existing"
                     logging.info(f"Авто {car_number_to_search} найден через Himera, но уже есть в Supabase.")
                 else:
-                new_car_number = himera_data.get("car_number", "").upper().replace(" ", "") # Добавляем .upper() и .replace(" ", "")
+                    new_car_number = himera_data.get("car_number", "").upper().replace(" ", "") # Добавляем .upper() и .replace(" ", "")
                     new_user = {
                         "car_number": new_car_number, # Используем очищенный и приведенный к верхнему регистру номер
                         "username": himera_data.get("telegram"), # Himera может возвращать username
