@@ -369,14 +369,15 @@ async def handle_message(message: Message):
             himera_data = await search_himera(car_number_to_search)
             if himera_data:
                 # Если нашли в Himera, проверяем, есть ли такой car_number уже, чтобы не дублировать
-                existing_user_by_himera_car = supabase.table("users").select("*").eq("car_number", himera_data.get("car_number")).execute().data
+                existing_user_by_himera_car = supabase.table("users").select("*").eq("car_number", new_car_number).execute().data # И здесь используем new_car_number
                 if existing_user_by_himera_car:
                     target_user = existing_user_by_himera_car[0]
                     source = "supabase_from_himera_existing"
                     logging.info(f"Авто {car_number_to_search} найден через Himera, но уже есть в Supabase.")
                 else:
+                new_car_number = himera_data.get("car_number", "").upper().replace(" ", "") # Добавляем .upper() и .replace(" ", "")
                     new_user = {
-                        "car_number": himera_data.get("car_number"),
+                        "car_number": new_car_number, # Используем очищенный и приведенный к верхнему регистру номер
                         "username": himera_data.get("telegram"), # Himera может возвращать username
                         "phone_number": himera_data.get("phone"),
                         "verified": False,
